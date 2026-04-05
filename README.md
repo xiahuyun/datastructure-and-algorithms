@@ -40,27 +40,3 @@
 | --- | --- |
 | `linked-list/circular-linked-list` | 当前为预留目录，待补充环形链表示例 |
 | `queue/blocking-queue` | 当前为预留目录，待补充阻塞队列示例 |
-
-## 目录重命名映射（Chinese -> English）
-
-| 中文目录 | 英文目录 |
-| --- | --- |
-| `查找` | `searching` |
-| `排序` | `sorting` |
-| `栈` | `stack` |
-| `队列` | `queue` |
-| `链表` | `linked-list` |
-| `递归` | `recursion` |
-| `冒泡` | `bubble-sort` |
-| `选择` | `selection` |
-| `插入` | `insertion` |
-| `快排` | `quick-sort` |
-| `归并` | `merge-sort` |
-| `堆排序` | `heap-sort` |
-| `顺序栈` | `array-stack` |
-| `链式栈` | `linked-stack` |
-| `循环队列` | `circular-queue` |
-| `链式队列` | `linked-queue` |
-| `阻塞队列` | `blocking-queue` |
-| `反转链表` | `reverse-linked-list` |
-| `环形链表` | `circular-linked-list` |
