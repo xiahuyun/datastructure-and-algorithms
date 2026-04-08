@@ -12,6 +12,7 @@
 | `queue` | 队列结构实现 | `circular-queue/main.go`, `linked-queue/main.go` |
 | `linked-list` | 链表题目与实现 | `reverse-linked-list/README.md`, `reverse-linked-list/main.go` |
 | `recursion` | 递归示例 | `main.go` |
+| `tree` | 树结构实现 | `b-tree/` |
 
 ## sorting 子目录细分
 
@@ -33,6 +34,16 @@
 | `queue/circular-queue` | 循环队列 | `main.go` |
 | `queue/linked-queue` | 链式队列 | `main.go` |
 | `linked-list/reverse-linked-list` | 反转链表题解与实现 | `README.md`, `main.go` |
+| `tree/b-tree` | 教材语义 B-Tree（m 阶） | `go.mod`, `btree.go`, `btree_test.go`, `example/main.go` |
+
+## tree/b-tree 子目录说明
+
+| 文件/目录 | 用途 |
+| --- | --- |
+| `tree/b-tree/btree.go` | B-Tree 核心实现，接口风格类似 google/btree |
+| `tree/b-tree/btree_test.go` | 插入、删除、范围遍历、克隆等测试 |
+| `tree/b-tree/example/main.go` | 普通演示与 `--step` 逐步演示模式 |
+| `tree/b-tree/README.md` | 该子项目的运行方式与实现说明 |
 
 ## 占位目录说明
 
