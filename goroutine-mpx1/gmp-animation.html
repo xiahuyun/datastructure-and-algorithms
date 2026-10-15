@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Go GMP 调度器动画（曹大风格）</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,"PingFang SC",sans-serif;background:#0b0e1a;color:#e6e8f0;min-height:100vh;padding:16px}
+h1{font-size:20px;margin-bottom:4px}
+.sub{color:#6b7088;font-size:12px;margin-bottom:14px}
+.controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+.mode-toggle{display:flex;background:#151929;border-radius:8px;overflow:hidden;border:1px solid #2a2f4a}
+.mode-toggle button{padding:7px 14px;border:none;background:transparent;color:#8a90a5;cursor:pointer;font-size:12px;font-weight:500}
+.mode-toggle button.active{background:#4a6cf7;color:white}
+.btn{padding:7px 14px;border:1px solid #3a4060;background:#151929;color:#e6e8f0;border-radius:8px;cursor:pointer;font-size:12px}
+.btn:hover{border-color:#4a6cf7;color:#4a6cf7}
+.status{margin-left:auto;font-size:12px;color:#6b7088;font-variant-numeric:tabular-nums}
+
+.stage{position:relative;width:100%;max-width:1020px;height:530px;margin:0 auto 16px;background:linear-gradient(180deg,#0f1320,#0b0e1a);border:1px solid #1f2438;border-radius:14px;overflow:hidden}
+
+.slot{position:absolute;border-radius:8px;border:2px dashed #2a2f4a;background:rgba(21,25,41,.7);display:flex;align-items:center;justify-content:center}
+.slot-label{position:absolute;top:-18px;left:50%;transform:translateX(-50%);font-size:10px;color:#5a6180;background:#0b0e1a;padding:1px 6px;border-radius:4px;white-space:nowrap}
+.slot.active{border-color:#4a6cf7;box-shadow:0 0 16px rgba(74,108,247,.2)}
+
+.slot.global-queue{left:30px;right:30px;top:18px;height:58px;border-style:solid;border-color:#2a4a6a;background:rgba(42,74,106,.08)}
+.slot.runnext{left:10px;top:28px;width:100px;height:66px}
+.slot.local-queue{right:10px;top:28px;width:140px;height:76px;border-style:solid;display:flex;flex-wrap:wrap;gap:4px;padding:6px;align-content:flex-start}
+.slot.running-slot{left:10px;right:10px;top:30px;height:66px;border-style:solid;border-color:#a060e0;background:rgba(160,96,224,.12)}
+
+.p-box{position:absolute;left:50%;transform:translateX(-50%);top:112px;width:270px;height:155px;border:2px solid #3a6a4a;border-radius:10px;background:rgba(58,106,74,.08)}
+.p-box-title{position:absolute;top:-18px;left:8px;font-size:11px;color:#6bd4a6;font-weight:600}
+.m-box{position:absolute;left:50%;transform:translateX(-50%);top:318px;width:270px;height:112px;border:2px solid #a060e0;border-radius:10px;background:rgba(160,96,224,.08)}
+.m-box-title{position:absolute;top:-18px;left:8px;font-size:11px;color:#c080f0;font-weight:600}
+.mp-line{position:absolute;left:50%;transform:translateX(-50%);width:2px;background:linear-gradient(180deg,#3a6a4a,#a060e0);top:267px;height:51px;opacity:.7}
+
+.wait-pool{position:absolute;right:14px;top:112px;width:108px;height:318px;border:2px dashed #4a4a6a;border-radius:10px;background:rgba(74,74,106,.06);padding:6px;display:flex;flex-direction:column;gap:5px}
+.done-pool{position:absolute;left:14px;top:112px;width:108px;height:318px;border:2px dashed #4a4a6a;border-radius:10px;background:rgba(74,74,106,.06);padding:6px;display:flex;flex-direction:column;gap:5px}
+.pool-title{position:absolute;top:-18px;left:6px;font-size:10px;color:#8a90a5}
+
+.event-layer{position:absolute;inset:0;pointer-events:none;z-index:30}
+
+.g-box{position:absolute;width:56px;height:40px;border-radius:6px;display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:11px;font-weight:600;color:white;box-shadow:0 4px 12px rgba(0,0,0,.4);z-index:10;transition:left .5s cubic-bezier(.4,0,.2,1),top .5s cubic-bezier(.4,0,.2,1),box-shadow .5s,transform .5s,opacity .4s}
+.g-box .g-lbl{font-weight:700;letter-spacing:.5px}
+.g-box .g-sub{font-size:8px;opacity:.85;margin-top:1px}
+.g-box.g-main{background:linear-gradient(135deg,#4a6cf7,#6b8dff)}
+.g-box.g-a{background:linear-gradient(135deg,#f76b4a,#ff8a6b)}
+.g-box.g-b{background:linear-gradient(135deg,#4af7c0,#6bffd8);color:#0a3020}
+.g-box.waited{opacity:.5;transform:scale(.85)}
+.g-box.running{box-shadow:0 0 24px rgba(255,255,255,.5),0 6px 16px rgba(0,0,0,.5);transform:scale(1.08);z-index:20;animation:pulse-glow 1s ease-in-out infinite}
+@keyframes pulse-glow{0%,100%{box-shadow:0 0 24px rgba(255,255,255,.5),0 6px 16px rgba(0,0,0,.5)}50%{box-shadow:0 0 40px rgba(255,255,255,.7),0 6px 16px rgba(0,0,0,.5)}}
+
+.toast{position:absolute;left:50%;transform:translateX(-50%);padding:6px 14px;border-radius:20px;background:rgba(74,108,247,.18);border:1px solid rgba(74,108,247,.4);color:#b0c4ff;font-size:12px;font-weight:500;opacity:0;transition:opacity .3s,top .5s;white-space:nowrap;backdrop-filter:blur(6px);pointer-events:none}
+.toast.show{opacity:1}
+
+.bolt{position:absolute;font-size:38px;color:#ff4444;opacity:0;transform:scale(.3) rotate(-20deg);transition:all .3s;text-shadow:0 0 12px #ff4444,0 0 24px #ff4444}
+.bolt.show{opacity:1;transform:scale(1.2) rotate(0deg)}
+
+.tlbar{max-width:1020px;margin:0 auto;background:#151929;border-radius:10px;border:1px solid #2a2f4a;padding:10px 14px}
+.tltrack{height:6px;background:#0b0e1a;border-radius:3px;position:relative;overflow:hidden}
+.tlfill{position:absolute;top:0;left:0;bottom:0;background:linear-gradient(90deg,#4a6cf7,#6b8dff);border-radius:3px;width:0%;transition:width .1s linear}
+.tllabels{display:flex;justify-content:space-between;margin-top:6px;font-size:10px;color:#5a6180}
+
+.narrative{max-width:1020px;margin:16px auto 0;padding:14px 18px;background:#151929;border-radius:12px;border:1px solid #2a2f4a;font-size:13px;line-height:1.7;color:#aeb5cf;min-height:72px}
+.narrative strong{color:#e6e8f0}
+.narrative .hl-blue{color:#6b8dff}
+.narrative .hl-red{color:#ff8a6b}
+.narrative .hl-green{color:#6bffd8}
+.narrative .hl-yellow{color:#ffd24a}
+
+.legend-row{max-width:1020px;margin:12px auto 0;display:flex;gap:16px;flex-wrap:wrap;font-size:11px;color:#6b7088}
+.legend-row .sw{display:inline-block;width:14px;height:10px;border-radius:3px;vertical-align:middle;margin-right:4px}
+</style>
+</head>
+<body>
+
+<h1>🧊 Go 调度器 GMP 动画</h1>
+<p class="sub">GOMAXPROCS(1) · 三个 goroutine · 曹大风格盒子物理移动</p>
+
+<div class="controls">
+  <div class="mode-toggle">
+    <button class="active" data-mode="async">✅ 异步抢占开启</button>
+    <button data-mode="sync">❌ 关闭抢占</button>
+  </div>
+  <button class="btn" id="playBtn">▶ 播放</button>
+  <button class="btn" id="resetBtn">↺ 重置</button>
+  <span class="status" id="status">0 / 6000ms</span>
+</div>
+
+<div class="stage" id="stage">
+  <div class="slot global-queue" id="s-global"><span class="slot-label">🌐 Global Queue</span></div>
+  <div class="done-pool" id="s-done"><span class="pool-title">🟡 Done Pool</span></div>
+  <div class="wait-pool" id="s-wait"><span class="pool-title">💤 Gwaiting Pool</span></div>
+  <div class="p-box"><div class="p-box-title">P0 (runnext + local queue)</div>
+    <div class="slot runnext" id="s-runnext"><span class="slot-label">runnext</span></div>
+    <div class="slot local-queue" id="s-local"><span class="slot-label">local queue</span></div>
+  </div>
+  <div class="mp-line"></div>
+  <div class="m-box"><div class="m-box-title">M0 (OS Thread)</div>
+    <div class="slot running-slot" id="s-running"><span class="slot-label">running slot</span></div>
+  </div>
+  <div class="event-layer" id="evtLayer"></div>
+</div>
+
+<div class="tlbar">
+  <div class="tltrack"><div class="tlfill" id="tlFill"></div></div>
+  <div class="tllabels"><span>0</span><span>2000</span><span>4000</span><span>6000ms</span></div>
+</div>
+
+<div class="narrative" id="narrative"><strong>点击 ▶ 播放。</strong><br>蓝色=main · 红色=G_A 纯循环 · 绿色=G_B ticker</div>
+
+<div class="legend-row">
+  <div><span class="sw" style="background:linear-gradient(135deg,#4a6cf7,#6b8dff)"></span>G_main</div>
+  <div><span class="sw" style="background:linear-gradient(135deg,#f76b4a,#ff8a6b)"></span>G_A 纯 CPU 循环</div>
+  <div><span class="sw" style="background:linear-gradient(135deg,#4af7c0,#6bffd8)"></span>G_B ticker 心跳</div>
+  <div><span class="sw" style="background:#3a6a4a"></span>P0 调度处理器</div>
+  <div><span class="sw" style="background:#a060e0"></span>M0 OS 线程</div>
+</div>
+
+<script>
+/* ======================= 事件时间线（纯 JS 对象） ======================= */
+function buildEvents(mode){
+  var E = [];
+  var mk = function(t, o){ o.t=t; E.push(o); };
+
+  // --- Phase 1: main 启动 ---
+  // 对应 Go 代码里的真实流程（有 <-aStarted 同步机制）：
+  //   main: go func(A){...}()  → 生成 A
+  //   main: <-aStarted         → main 阻塞！等 A close(aStarted)
+  //   A:   fmt.Println         → close(aStarted)  → 唤醒 main
+  //   A:   for i < N { i++ }   → A 开始跑死循环（永不释放 CPU）
+  //   main: (虽然被唤醒了，但拿不到 CPU！A 还占着 M0！)
+  //   main: (等 5 秒！直到 A 下一个函数调用触发调度检查点)
+  //   main: go func(B){...}()  → B 才被生成！
+  //   main: wg.Wait()          → main 再次阻塞
+  mk(0,  {type:'narr', narr:'<strong>Phase 1: main 启动，生成 A 后立刻阻塞</strong><br>' +
+    '代码片段：<br>' +
+    '<code>&nbsp;&nbsp;aStarted := make(chan struct{})<br>' +
+    '&nbsp;&nbsp;go func(){ ... close(aStarted); for i++{} }()<br>' +
+    '&nbsp;&nbsp;<span class="hl-red"><-aStarted</span> &nbsp;// ← main 卡在这里！</code>'});
+  mk(0,  {type:'pos', who:'G_main', slot:'running'});
+  mk(0,  {type:'run',  who:'G_main', state:'running'});
+
+  mk(10, {type:'spawn', who:'G_A'});
+  mk(15, {type:'pos',  who:'G_A', slot:'runnext'});
+  mk(15, {type:'narr', narr:'<strong>main: go func(A){}()</strong> → A 占 runnext<br>' +
+    '<em>runnext: [A]</em>'});
+
+  // main 调用 <-aStarted → 立刻阻塞！
+  mk(20, {type:'pos',  who:'G_main', slot:'wait'});
+  mk(20, {type:'run',  who:'G_main', state:'waiting'});
+  mk(20, {type:'narr', narr:'<strong>main: <-aStarted</strong> ⚠️ 阻塞！<br>' +
+    '这是一个 <em>无缓冲 channel 接收</em>，此时 channel 还没 close<br>' +
+    '→ main 进入 💤 Gwaiting Pool，M0 空了 → schedule() 启动'});
+
+  // schedule() → runnext = A → 拉 A 到 running slot
+  mk(35, {type:'pos',  who:'G_A', slot:'running'});
+  mk(35, {type:'run',  who:'G_A', state:'running'});
+  mk(35, {type:'narr', narr:'<strong>schedule() 启动！</strong>runnext = A → A 被拉到 running slot<br>' +
+    'A 执行 fmt.Println + close(aStarted) → main 被唤醒（回到 runnable 队列）<br>' +
+    '然后 A 开始 for { i++ } 纯循环... <strong>永不释放 CPU！</strong>'});
+
+  // A close(aStarted) 唤醒 main，但 main 拿不到 CPU
+  // main 变成 runnable 但不在 running slot
+  mk(45, {type:'pos',  who:'G_main', slot:'global'});
+  mk(45, {type:'narr', narr:'🔔 <strong>A: close(aStarted)</strong><br>' +
+    'main 被唤醒！但 main 只是变回 runnable（回到 Global Queue）<br>' +
+    'A 的 for 循环永不释放 CPU → main <strong>虽然醒了，但拿不到 CPU！</strong><br><br>' +
+    '<span class="hl-yellow">💡 这就是 channel 阻塞的威力！</span><br>' +
+    '<span class="hl-yellow">main 要等 5 秒才能执行 go func(B){}() —— B 根本还没生成！</span>'});
+
+  // --- Phase 2: A 跑 5 秒，main 等着 ---
+  if (mode === 'async') {
+    // 异步抢占：A 被定期打断 → main 有机会跑到 CPU → 生成 B
+    // 但 A 占的时间片多，main 生成 B 后又被 A 抢回去
+    for (var c = 1; c <= 14; c++) {
+      var t = 60 + c * 350;
+      mk(t,   {type:'bolt', who:'G_A'});
+      mk(t+20,{type:'pos',  who:'G_A', slot:'local'});
+      mk(t+20,{type:'run',  who:'G_A', state:'waiting'});
+      mk(t+40,{type:'pos',  who:'G_main', slot:'running'});
+      mk(t+40,{type:'run',  who:'G_main', state:'running'});
+      mk(t+60,{type:'narr', narr:'⚡ SIGURG 抢占 A！main 拿到 CPU<br>' +
+        'main: go func(B){}()<br>' +
+        '→ B 生成 → A 又被拉回 running slot'});
+      mk(t+90,{type:'spawn', who:'G_B'});
+      mk(t+95,{type:'pos',  who:'G_B', slot:'runnext'});
+      mk(t+120,{type:'pos',  who:'G_A', slot:'running'});
+      mk(t+120,{type:'run',  who:'G_A', state:'running'});
+      mk(t+130,{type:'pos',  who:'G_main', slot:'wait'});
+      mk(t+130,{type:'run',  who:'G_main', state:'waiting'});
+    }
+  } else {
+    // sync 模式：A 完全独占，main 永远拿不到
+    mk(60, {type:'narr', narr:'<strong>A 的 for 循环永不释放 CPU</strong><br>' +
+      'main 在 Global Queue 里等了又等...<br>' +
+      'B goroutine 根本还没生成！<br><br>' +
+      '<span class="hl-red">⏳ main: "我还要等 A 跑完 5 秒才能 go func(B)()..."</span>'});
+    mk(1500, {type:'narr', narr:'<strong>1.5 秒了...</strong> A 还在跑 for 循环'});
+    mk(3000, {type:'narr', narr:'<strong>3 秒了...</strong> A 还在跑 for 循环'});
+    mk(4500, {type:'narr', narr:'<strong>4.5 秒了...</strong> 快了！A 还差一点跑完'});
+  }
+
+  // --- Phase 3: A 跑完（两种模式汇合）---
+  var A_DONE = 5100;
+  mk(A_DONE,   {type:'pos', who:'G_A', slot:'done'});
+  mk(A_DONE,   {type:'run',  who:'G_A', state:'done'});
+
+  if (mode === 'sync') {
+    // sync 模式：A 跑完后执行 fmt.Printf → 函数调用 → 调度检查点！
+    // schedule() 启动 → main 在 global queue 里 → main 被拉到 running slot
+    mk(A_DONE, {type:'narr', narr:'🎉 <strong>A 跑完了！</strong>' +
+      '<br>A 执行 fmt.Printf —— 这是函数调用 → 触发 <em>调度检查点</em>' +
+      '<br>schedule() 终于启动！main 在 Global Queue 里 → main 被拉到 M0！'});
+    mk(A_DONE + 80, {type:'pos',  who:'G_main', slot:'running'});
+    mk(A_DONE + 80, {type:'run',  who:'G_main', state:'running'});
+    mk(A_DONE + 80, {type:'narr', narr:'<strong>main 拿到 CPU 了！</strong> 立刻执行 go func(B){}()<br>' +
+      'B 被生成 → 这是 B 第一次出现！'});
+    mk(A_DONE + 100, {type:'spawn', who:'G_B'});
+    mk(A_DONE + 105, {type:'pos',  who:'G_B', slot:'runnext'});
+    mk(A_DONE + 110, {type:'narr', narr:'main 继续执行 wg.Wait() → main 又阻塞'});
+    mk(A_DONE + 120, {type:'pos',  who:'G_main', slot:'wait'});
+    mk(A_DONE + 120, {type:'run',  who:'G_main', state:'waiting'});
+
+    // schedule() → runnext = B → B 被拉到 running slot → ticker 又阻塞
+    var B_START = A_DONE + 180;
+    mk(B_START, {type:'pos',  who:'G_B', slot:'running'});
+    mk(B_START, {type:'run',  who:'G_B', state:'running'});
+    mk(B_START, {type:'narr', narr:'schedule() → runnext = B → B 被拉到 running slot'});
+    mk(B_START + 80, {type:'pos',  who:'G_B', slot:'wait'});
+    mk(B_START + 80, {type:'run',  who:'G_B', state:'waiting'});
+    mk(B_START + 80, {type:'narr', narr:'B 执行到 ticker.C → 又阻塞（ticker 时间被重置）'});
+
+    // 后续 ticker 每 500ms
+    var last = B_START + 80;
+    for (var i = 0; i < 10; i++) {
+      var t = last + 500;
+      mk(t,   {type:'pos',  who:'G_B', slot:'running'});
+      mk(t,   {type:'run',  who:'G_B', state:'running'});
+      mk(t+80,{type:'pos',  who:'G_B', slot:'wait'});
+      mk(t+80,{type:'run',  who:'G_B', state:'waiting'});
+      last = t + 80;
+    }
+    mk(last + 80, {type:'pos', who:'G_B', slot:'done'});
+    mk(last + 80, {type:'run',  who:'G_B', state:'done'});
+    mk(last + 200, {type:'pos', who:'G_main', slot:'running'});
+    mk(last + 200, {type:'run',  who:'G_main', state:'running'});
+    mk(last + 280, {type:'pos', who:'G_main', slot:'done'});
+    mk(last + 280, {type:'run',  who:'G_main', state:'done'});
+  } else {
+    // async 模式：A 之前就被多次抢占，main 早就生成了 B
+    mk(A_DONE, {type:'narr', narr:'🎉 <strong>A 跑完了！</strong>（之前已经被抢占打断过多次）<br>main 在 Global Queue 里 → main 被拉到 M0 跑完'});
+    mk(A_DONE + 80, {type:'pos',  who:'G_main', slot:'running'});
+    mk(A_DONE + 80, {type:'run',  who:'G_main', state:'running'});
+    mk(A_DONE + 150, {type:'pos', who:'G_main', slot:'wait'});
+    mk(A_DONE + 150, {type:'run',  who:'G_main', state:'waiting'});
+    mk(A_DONE + 200, {type:'pos', who:'G_B', slot:'running'});
+    mk(A_DONE + 200, {type:'run',  who:'G_B', state:'running'});
+    mk(A_DONE + 280, {type:'pos', who:'G_B', slot:'wait'});
+    mk(A_DONE + 280, {type:'run',  who:'G_B', state:'waiting'});
+
+    var last2 = A_DONE + 280;
+    for (var i = 0; i < 8; i++) {
+      var t = last2 + 500;
+      mk(t,   {type:'pos',  who:'G_B', slot:'running'});
+      mk(t,   {type:'run',  who:'G_B', state:'running'});
+      mk(t+80,{type:'pos',  who:'G_B', slot:'wait'});
+      mk(t+80,{type:'run',  who:'G_B', state:'waiting'});
+      last2 = t + 80;
+    }
+    mk(last2 + 80, {type:'pos', who:'G_B', slot:'done'});
+    mk(last2 + 80, {type:'run',  who:'G_B', state:'done'});
+    mk(last2 + 180, {type:'pos', who:'G_main', slot:'running'});
+    mk(last2 + 180, {type:'run',  who:'G_main', state:'running'});
+    mk(last2 + 260, {type:'pos', who:'G_main', slot:'done'});
+    mk(last2 + 260, {type:'run',  who:'G_main', state:'done'});
+  }
+
+  mk(5900, {type:'narr', narr:'<strong>🎬 动画结束！</strong><br>' +
+    (mode === 'async'
+      ? '<span class="hl-green">异步抢占</span>让 main 能定期从 A 手里抢到 CPU，B 被正常生成并运行'
+      : '<span class="hl-red">协作式调度</span>下 A 独占 CPU 整整 5 秒，main 和 B 差点被彻底饿死<br><br>' +
+        '<span class="hl-yellow">💡 就是那个不起眼的 <code><-aStarted</code> channel 阻塞，让 main 的执行时间推迟了 5 秒</span>')
+  });
+
+  E.sort(function(a,b){return a.t - b.t});
+  return E;
+}
+
+/* ======================= 槽位坐标 ======================= */
+function getPos(slot, localIdx) {
+  var s = document.getElementById('stage').getBoundingClientRect();
+  var g = document.getElementById(slot).getBoundingClientRect();
+  var x = g.left - s.left, y = g.top - s.top;
+  if (slot === 's-runnext') { x += 22; y += 14; }
+  else if (slot === 's-local') {
+    var idx = localIdx || 0;
+    x += 8 + (idx % 2) * 68;
+    y += 6 + Math.floor(idx / 2) * 50;
+  }
+  else if (slot === 's-running') { x += 22; y += 13; }
+  else if (slot === 's-wait') {
+    var el = document.querySelector('#s-wait .g-box');
+    var idx2 = document.querySelectorAll('#s-wait .g-box').length;
+    x += 26; y += 6 + idx2 * 46;
+  }
+  else if (slot === 's-done') {
+    var idx3 = document.querySelectorAll('#s-done .g-box').length;
+    x += 26; y += 6 + idx3 * 46;
+  }
+  else { x += 20; y += 24; }
+  return {x:x, y:y};
+}
+
+/* ======================= 动画引擎 ======================= */
+var EVENTS = buildEvents('async');
+var MODE = 'async';
+var playing = false;
+var t0 = null;
+var idx = 0;
+var anim = null;
+var boxes = {};   // who -> DOM
+var localIdx = {};
+
+function makeBox(who) {
+  if (boxes[who]) return boxes[who];
+  var s = document.createElement('div');
+  s.className = 'g-box g-' + who.toLowerCase().replace('_','-');
+  var map = {
+    'G_main':['main','主协程'],
+    'G_A':['A','纯循环'],
+    'G_B':['B','ticker'],
+  };
+  var info = map[who] || [who, ''];
+  s.innerHTML = '<div class="g-lbl">' + info[0] + '</div><div class="g-sub">' + info[1] + '</div>';
+  s.style.opacity = '0';
+  document.getElementById('stage').appendChild(s);
+  boxes[who] = s;
+  return s;
+}
+
+function moveBox(who, slot) {
+  var b = makeBox(who);
+  b.style.opacity = '1';
+  var idx = 0;
+  if (slot === 's-local') {
+    if (localIdx[who] === undefined) localIdx[who] = Object.keys(localIdx).length;
+    idx = localIdx[who];
+  }
+  var p = getPos(slot, idx);
+  b.style.left = p.x + 'px';
+  b.style.top  = p.y + 'px';
+}
+
+function setState(who, state) {
+  var b = boxes[who]; if (!b) return;
+  b.classList.remove('running','waited');
+  if (state === 'running') b.classList.add('running');
+  else if (state === 'waiting') b.classList.add('waited');
+  else if (state === 'done') { b.style.opacity = '.4'; b.classList.add('waited'); }
+}
+
+function fire(ev) {
+  //console.log('EV', ev.t, ev.type, ev.who||ev.slot||'');
+  switch(ev.type) {
+    case 'spawn':
+      makeBox(ev.who); boxes[ev.who].style.opacity = '0';
+      break;
+    case 'pos':
+      var map = {'runnext':'s-runnext','local':'s-local','running':'s-running','wait':'s-wait','done':'s-done','global':'s-global'};
+      moveBox(ev.who, map[ev.slot]);
+      break;
+    case 'run':
+      setState(ev.who, ev.state);
+      break;
+    case 'bolt': {
+      var tgt = boxes[ev.who]; if (!tgt) break;
+      var bolt = document.createElement('div');
+      bolt.className = 'bolt'; bolt.textContent = '⚡';
+      bolt.style.left = (tgt.offsetLeft + 8) + 'px';
+      bolt.style.top  = (tgt.offsetTop - 28) + 'px';
+      document.getElementById('evtLayer').appendChild(bolt);
+      requestAnimationFrame(function(){ bolt.classList.add('show'); });
+      setTimeout(function(){ bolt.classList.remove('show'); setTimeout(function(){bolt.remove()},300); }, 500);
+      break;
+    }
+    case 'narr':
+      document.getElementById('narrative').innerHTML = ev.narr;
+      break;
+  }
+}
+
+function loop(ts) {
+  if (!playing) return;
+  if (!t0) t0 = ts;
+  var t = (ts - t0) * 0.4;
+  while (idx < EVENTS.length && EVENTS[idx].t <= t) {
+    fire(EVENTS[idx]); idx++;
+  }
+  document.getElementById('status').textContent = Math.round(t) + ' / 6000ms';
+  document.getElementById('tlFill').style.width = Math.min(100, t / 6000 * 100) + '%';
+  if (idx >= EVENTS.length) {
+    playing = false;
+    document.getElementById('playBtn').textContent = '▶ 重播';
+    return;
+  }
+  anim = requestAnimationFrame(loop);
+}
+
+function resetAll() {
+  playing = false;
+  t0 = null;
+  cancelAnimationFrame(anim);
+  idx = 0; localIdx = {};
+  Object.values(boxes).forEach(function(b){ b.remove(); });
+  Object.keys(boxes).forEach(function(k){ delete boxes[k]; });
+  document.getElementById('evtLayer').innerHTML = '';
+  document.getElementById('playBtn').textContent = '▶ 播放';
+  document.getElementById('status').textContent = '0 / 6000ms';
+  document.getElementById('tlFill').style.width = '0%';
+  document.getElementById('narrative').innerHTML = '<strong>点击 ▶ 播放。</strong><br>蓝色=main · 红色=G_A 纯循环 · 绿色=G_B ticker';
+  EVENTS = buildEvents(MODE);
+}
+
+document.querySelectorAll('#modeToggle button').forEach(function(b){
+  b.addEventListener('click', function(){
+    document.querySelectorAll('#modeToggle button').forEach(function(x){x.classList.remove('active');});
+    b.classList.add('active');
+    MODE = b.dataset.mode;
+    resetAll();
+  });
+});
+
+document.getElementById('playBtn').addEventListener('click', function(){
+  if (playing) { playing = false; this.textContent = '▶ 继续'; return; }
+  if (idx >= EVENTS.length) resetAll();
+  playing = true; t0 = null;
+  this.textContent = '⏸ 暂停';
+  anim = requestAnimationFrame(loop);
+});
+document.getElementById('resetBtn').addEventListener('click', resetAll);
+
+resetAll();
+</script>
+</body>
+</html>

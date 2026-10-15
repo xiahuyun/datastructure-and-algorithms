@@ -1,0 +1,779 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Go 调度器动画：GOMAXPROCS(1) 下的三个 goroutine</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px;
+    font-family: -apple-system, "SF Pro Display", "PingFang SC", "Helvetica Neue", Arial, sans-serif;
+    background: #0f1220; color: #e8eaf0;
+    line-height: 1.5;
+  }
+  h1 { margin: 0 0 4px; font-size: 22px; }
+  .subtitle { color: #8a90a5; margin-bottom: 20px; font-size: 13px; }
+
+  .controls {
+    display: flex; gap: 12px; align-items: center; margin-bottom: 20px;
+    flex-wrap: wrap;
+  }
+  .mode-toggle {
+    display: flex; background: #1a1e33; border-radius: 8px; overflow: hidden;
+    border: 1px solid #2a2f4a;
+  }
+  .mode-toggle button {
+    padding: 8px 16px; border: none; background: transparent; color: #aeb5cf;
+    cursor: pointer; font-size: 13px; font-weight: 500; transition: all 0.2s;
+  }
+  .mode-toggle button.active {
+    background: #4a6cf7; color: white;
+  }
+  .btn {
+    padding: 8px 16px; border: 1px solid #3a4060; background: #1a1e33;
+    color: #e8eaf0; border-radius: 8px; cursor: pointer; font-size: 13px;
+    transition: all 0.2s;
+  }
+  .btn:hover { border-color: #4a6cf7; color: #4a6cf7; }
+  .status {
+    margin-left: auto; font-size: 13px; color: #8a90a5;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ===== 调度图主体 ===== */
+  .diagram {
+    background: #151829; border: 1px solid #2a2f4a; border-radius: 12px;
+    padding: 20px; overflow-x: auto;
+  }
+  .lanes { display: flex; flex-direction: column; gap: 4px; position: relative; }
+
+  .lane-label {
+    width: 110px; flex-shrink: 0; font-size: 12px; padding: 4px 8px;
+    color: #8a90a5; text-align: right;
+  }
+  .lane {
+    display: flex; align-items: center; gap: 8px; height: 44px;
+    border-radius: 6px;
+  }
+  .lane-label span { color: #e8eaf0; font-weight: 600; }
+
+  .track {
+    flex: 1; height: 44px; background: #1a1e33; border-radius: 6px;
+    position: relative; overflow: hidden; border: 1px solid #242840;
+  }
+
+  /* 状态块 */
+  .seg {
+    position: absolute; top: 2px; bottom: 2px; border-radius: 4px;
+    transition: opacity 0.3s, transform 0.3s;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10px; font-weight: 500; overflow: hidden;
+    letter-spacing: 0.3px;
+  }
+  .seg.running { color: white; box-shadow: 0 0 8px rgba(255,255,255,0.15); }
+  .seg.waiting { color: rgba(255,255,255,0.6); }
+  .seg.runnable {
+    color: rgba(255,255,255,0.7);
+    border: 1.5px dashed currentColor; background: transparent !important;
+  }
+
+  /* 各 goroutine 配色 */
+  .g-main.running  { background: linear-gradient(90deg, #4a6cf7, #6b8dff); }
+  .g-main.waiting  { background: rgba(74,108,247,0.2); }
+  .g-main.runnable { color: rgba(74,108,247,0.8); }
+
+  .g-a.running     { background: linear-gradient(90deg, #f76b4a, #ff8a6b); }
+  .g-a.waiting     { background: rgba(247,107,74,0.15); }
+  .g-a.runnable    { color: rgba(247,107,74,0.8); }
+
+  .g-b.running     { background: linear-gradient(90deg, #4af7c0, #6bffd8); }
+  .g-b.waiting     { background: rgba(74,247,192,0.15); }
+  .g-b.runnable    { color: rgba(74,247,192,0.8); }
+
+  /* OS 线程 */
+  .os-thread.running { background: linear-gradient(90deg, #b04af7, #d86bff); color: white; }
+  .os-thread.waiting { background: rgba(176,74,247,0.15); color: rgba(176,74,247,0.7); }
+  .lane-os { opacity: 0.95; }
+  .os-label {
+    background: #2a1f3a; padding: 2px 6px; border-radius: 3px;
+    font-size: 9px; color: #d86bff; font-weight: 600;
+  }
+
+  /* 时间轴刻度 */
+  .timeline {
+    display: flex; margin-left: 118px; margin-top: 8px;
+    position: relative; height: 24px;
+  }
+  .ticks {
+    flex: 1; position: relative;
+  }
+  .ticks .tick {
+    position: absolute; top: 0; bottom: 0;
+    border-left: 1px solid #3a4060; padding-left: 4px;
+    font-size: 10px; color: #5a6180;
+  }
+  .ticks .tick:first-child { border-left: 1px solid #5a6180; }
+
+  /* 事件标记 */
+  .event {
+    position: absolute; top: -4px; width: 12px; height: 12px;
+    transform: translateX(-50%);
+    z-index: 10;
+  }
+  .event.sigurg {
+    background: #ff4444; clip-path: polygon(50% 0%, 100% 100%, 0% 100%);
+  }
+  .event.tick {
+    background: #4af7c0; border-radius: 50%;
+    border: 2px solid #0f1220;
+  }
+  .event.annotation {
+    position: absolute; top: 14px; transform: translateX(-50%);
+    font-size: 9px; white-space: nowrap;
+    padding: 2px 5px; border-radius: 3px;
+  }
+  .event.sigurg + .event.annotation {
+    background: rgba(255,68,68,0.15); color: #ff8080;
+    top: -16px;
+  }
+  .event.tick + .event.annotation {
+    background: rgba(74,247,192,0.15); color: #80ffd8;
+  }
+
+  /* 当前播放指针 */
+  .playhead {
+    position: absolute; top: 0; bottom: 0; width: 2px;
+    background: #ffd24a; z-index: 20;
+    box-shadow: 0 0 8px rgba(255,210,74,0.5);
+    pointer-events: none;
+  }
+  .playhead::before {
+    content: '◀'; position: absolute; top: -14px; left: -5px;
+    color: #ffd24a; font-size: 10px;
+  }
+
+  /* 图例 */
+  .legend {
+    margin-top: 20px; padding: 16px; background: #151829;
+    border: 1px solid #2a2f4a; border-radius: 12px;
+  }
+  .legend h3 { margin: 0 0 12px; font-size: 14px; color: #e8eaf0; }
+  .legend-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 12px;
+  }
+  .legend-item { display: flex; gap: 10px; align-items: flex-start; font-size: 12px; color: #aeb5cf; }
+  .legend-item .swatch {
+    width: 16px; height: 16px; border-radius: 3px; flex-shrink: 0;
+    margin-top: 1px;
+  }
+  .legend-item .dot { width: 12px; height: 12px; flex-shrink: 0; margin-top: 2px; }
+
+  /* 说明文字 */
+  .explanation {
+    margin-top: 16px; padding: 14px 16px; background: #1a1f36;
+    border-radius: 10px; font-size: 12px; color: #aeb5cf;
+    border-left: 3px solid #4a6cf7;
+  }
+  .explanation strong { color: #e8eaf0; }
+  .explanation.highlight {
+    background: rgba(247,107,74,0.1);
+    border-left-color: #f76b4a;
+  }
+
+  .summary {
+    margin-top: 16px; display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+  }
+  .summary-card {
+    padding: 14px; border-radius: 10px; font-size: 12px;
+  }
+  .summary-card.good {
+    background: rgba(74,247,192,0.08); border: 1px solid rgba(74,247,192,0.3);
+    color: #80ffd8;
+  }
+  .summary-card.bad {
+    background: rgba(247,107,74,0.08); border: 1px solid rgba(247,107,74,0.3);
+    color: #ffa080;
+  }
+  .summary-card strong { color: #e8eaf0; display: block; margin-bottom: 4px; }
+
+  /* 运行时指标面板 */
+  .metrics {
+    display: flex; gap: 16px; font-size: 11px; color: #5a6180;
+    padding: 8px 12px; background: #0f1220; border-radius: 6px;
+    margin-bottom: 16px;
+  }
+  .metrics span { font-variant-numeric: tabular-nums; }
+  .metrics b { color: #e8eaf0; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<h1>🎬 Go 调度器动画：GOMAXPROCS(1) 下的三个 goroutine</h1>
+<p class="subtitle">main goroutine（蓝色）/ goroutine A 纯 CPU 循环（红色）/ goroutine B ticker 心跳（绿色）</p>
+
+<div class="metrics">
+  <div>GOMAXPROCS: <b>1</b></div>
+  <div>M（OS 线程）: <b id="m-count">1</b></div>
+  <div>P（调度上下文）: <b id="p-count">1</b></div>
+  <div>当前 goroutine: <b id="running-goroutine" style="color:#ffd24a">—</b></div>
+  <div>动画时间: <b id="anim-time" style="color:#ffd24a">0ms</b></div>
+</div>
+
+<div class="controls">
+  <div class="mode-toggle" id="modeToggle">
+    <button class="active" data-mode="async">✅ 异步抢占开启（Go 1.14+ 默认）</button>
+    <button data-mode="sync">❌ 关闭抢占（纯协作式）</button>
+  </div>
+  <button class="btn" id="playBtn">▶ 播放动画</button>
+  <button class="btn" id="resetBtn">↺ 重置</button>
+  <span class="status" id="status"></span>
+</div>
+
+<div class="diagram">
+  <div class="lanes" id="lanes">
+    <!-- JS 动态生成三条泳道 + 一条 OS 线程泳道 -->
+  </div>
+  <div class="timeline">
+    <div class="ticks" id="ticks"></div>
+  </div>
+  <div class="playhead" id="playhead" style="left: 0;"></div>
+</div>
+
+<div class="explanation" id="explanation">
+  <strong>点击"播放动画"开始。</strong> 上面的 OS 线程泳道（紫色）表示真正的物理执行单元，<br>
+  三个 goroutine 必须依次排队才能在这个线程上跑。
+</div>
+
+<div class="summary">
+  <div class="summary-card good">
+    <strong>✅ 抢占开启（默认模式）</strong>
+    Go runtime 每 ~10ms 给正在运行的 goroutine 发 <b>SIGURG</b> 信号硬打断它，<br>
+    即使是纯算术循环也不例外。多个 goroutine 能公平分享 CPU 时间。
+  </div>
+  <div class="summary-card bad">
+    <strong>❌ 抢占关闭（asyncpreemptoff=1）</strong>
+    goroutine 必须 <b>主动让出</b> CPU（函数调用、channel、系统调用）。<br>
+    纯 <code>for i++ {}</code> 循环永不主动让出 → <b>其他 goroutine 被彻底饿死</b>，<br>
+    直到 A 跑完 5 秒才轮到 B。这就是 Go 1.14 以前的经典问题。
+  </div>
+</div>
+
+<div class="legend">
+  <h3>图例</h3>
+  <div class="legend-grid">
+    <div class="legend-item">
+      <div class="swatch g-main running"></div>
+      <div><b>main goroutine</b><br>启动 A → 等 channel → 启动 B → wg.Wait() 阻塞</div>
+    </div>
+    <div class="legend-item">
+      <div class="swatch g-a running"></div>
+      <div><b>goroutine A</b><br>纯 for { i++ } 循环，200 亿次，约 5 秒</div>
+    </div>
+    <div class="legend-item">
+      <div class="swatch g-b running"></div>
+      <div><b>goroutine B</b><br>每 500ms 打印一条心跳，共 12 条</div>
+    </div>
+    <div class="legend-item">
+      <div class="swatch os-thread running"></div>
+      <div><b>OS 线程 M</b><br>真正跑指令的物理单元，GOMAXPROCS(1) = 只有 1 个</div>
+    </div>
+    <div class="legend-item">
+      <div class="swatch runnable" style="border:1.5px dashed #aeb5cf;background:transparent"></div>
+      <div><b>Waiting 状态</b><br>goroutine 在等 channel / timer / WaitGroup，不占 CPU</div>
+    </div>
+    <div class="legend-item">
+      <div class="dot" style="width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-bottom:10px solid #ff4444"></div>
+      <div><b>SIGURG 抢占信号</b><br>runtime 发给 goroutine 的硬中断（仅抢占开启模式）</div>
+    </div>
+    <div class="legend-item">
+      <div class="dot" style="background:#4af7c0;border-radius:50%"></div>
+      <div><b>Ticker 事件</b><br>500ms 定时器触发，goroutine B 被唤醒</div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ======================================================================
+   Go 调度器模拟
+   时间轴 0 ~ 6000ms
+   三种角色：main goroutine / A（纯 CPU 循环 0~5000ms）/ B（ticker）
+   ====================================================================== */
+
+const TOTAL_MS = 6000;
+const TICK_MS  = 500;        // B 的 ticker 周期
+const A_LOOP_MS = 5000;      // A 纯循环持续时间
+const PREEMPT_MS = 200;      // 抢占间隔（动画里用 200ms 看得更清楚，实际 ~10ms）
+const QUANTUM_MS = 150;      // 每次被抢占后 goroutine 实际跑的时间片
+
+// 场景数据：时间序列事件
+// 每个事件 = { t, who, action }
+
+function buildTimeline(mode) {
+  // mode: 'async' 抢占开启 / 'sync' 抢占关闭
+  const events = [];
+
+  // --- main goroutine 行为 ---
+  events.push({ t: 0, who: 'main', seg: { state: 'running', label: '启动 A' } });
+  events.push({ t: 5, who: 'main', seg: { state: 'running', label: 'close(aStarted)' } });
+  events.push({ t: 10, who: 'main', seg: { state: 'waiting', label: '阻塞于 <-aStarted' } });
+
+  // --- A goroutine 行为 ---
+  events.push({ t: 0, who: 'A', seg: { state: 'waiting', label: '等待调度' } });
+  events.push({ t: 5, who: 'A', seg: { state: 'running', label: '打印日志' } });
+  events.push({ t: 10, who: 'A', seg: { state: 'running', label: 'close(aStarted)' } });
+  events.push({ t: 15, who: 'A', seg: { state: 'running', label: '开始纯循环' } });
+
+  // --- main 继续启动 B ---
+  events.push({ t: 20, who: 'main', seg: { state: 'running', label: '收到 aStarted' } });
+  events.push({ t: 30, who: 'main', seg: { state: 'running', label: '启动 B' } });
+  events.push({ t: 40, who: 'main', seg: { state: 'running', label: 'wg.Wait()' } });
+  events.push({ t: 45, who: 'main', seg: { state: 'waiting', label: '阻塞于 wg.Wait' } });
+
+  // --- B goroutine 行为 ---
+  events.push({ t: 30, who: 'B', seg: { state: 'waiting', label: '等待调度' } });
+  events.push({ t: 40, who: 'B', seg: { state: 'running', label: '打印启动日志' } });
+  events.push({ t: 60, who: 'B', seg: { state: 'waiting', label: '阻塞于 ticker.C' } });
+
+  // OS 线程从 t=0 开始就被 A 占住
+  events.push({ t: 15, who: 'os', seg: { state: 'A', label: 'A running' } });
+
+  if (mode === 'async') {
+    /* 抢占开启模式：
+       每 200ms 一个 SIGURG → A 被抢占 → 检查有没有其他 goroutine 在 runnable
+       B 每 500ms ticker 被唤醒一次 → 抢到时间片 → 打印心跳 → 又等 ticker
+    */
+    let osOwner = 'A';
+    let preemptTime = PREEMPT_MS;
+
+    for (let t = preemptTime; t <= A_LOOP_MS; t += PREEMPT_MS) {
+      // SIGURG 抢占 A
+      events.push({ t: t - 1, who: 'sigurg', pos: t - 1 });
+
+      // OS 线程切换
+      events.push({ t, who: 'os', seg: { state: 'wait', label: '调度器切换' } });
+
+      // 决定下一个跑谁：看 runnable 队列
+      // B 的 ticker 唤醒时刻：500, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500, 5000
+      const bTick = t % TICK_MS === 0 || Math.floor(t / TICK_MS) > Math.floor((t - PREEMPT_MS) / TICK_MS);
+      const mainReady = false; // main 一直等 wg.Wait
+
+      // 让 B 有机会：在 ticker 时间点上，或者每隔几个抢占周期让 B 跑一下
+      const shouldRunB = (t >= TICK_MS && t % TICK_MS < PREEMPT_MS + 30) || (t % (PREEMPT_MS * 3) === 0 && t > 100);
+
+      if (shouldRunB && t < A_LOOP_MS) {
+        // 唤醒 B（如果 ticker 时间到了）
+        if (t % TICK_MS < PREEMPT_MS && t >= TICK_MS) {
+          events.push({ t, who: 'bTick', pos: t });
+          events.push({ t, who: 'B', seg: { state: 'runnable', label: 'ticker 唤醒' } });
+        }
+        events.push({ t, who: 'os', seg: { state: 'B', label: 'B running' } });
+        events.push({ t, who: 'B', seg: { state: 'running', label: `心跳 #${Math.floor(t / TICK_MS)}` } });
+        // B 跑 ~50ms 打印日志
+        const bEnd = t + 50;
+        if (bEnd <= A_LOOP_MS) {
+          events.push({ t: bEnd, who: 'B', seg: { state: 'waiting', label: '阻塞于 ticker.C' } });
+          events.push({ t: bEnd, who: 'os', seg: { state: 'A', label: '回到 A' } });
+          events.push({ t: bEnd, who: 'A', seg: { state: 'running', label: '纯循环...' } });
+        }
+        osOwner = 'B';
+      } else {
+        // 继续 A
+        events.push({ t, who: 'os', seg: { state: 'A', label: 'A running' } });
+        osOwner = 'A';
+      }
+    }
+
+    // A 结束
+    events.push({ t: A_LOOP_MS, who: 'A', seg: { state: 'running', label: '打印结束日志' } });
+    events.push({ t: A_LOOP_MS + 30, who: 'A', seg: { state: 'done', label: 'wg.Done()' } });
+    events.push({ t: A_LOOP_MS + 40, who: 'os', seg: { state: 'wait', label: 'A 结束' } });
+
+    // B 继续剩余 ticker
+    let bLastTick = Math.ceil(A_LOOP_MS / TICK_MS) * TICK_MS;
+    for (let t = bLastTick; t <= TOTAL_MS; t += TICK_MS) {
+      events.push({ t, who: 'bTick', pos: t });
+      events.push({ t, who: 'os', seg: { state: 'B', label: 'B' } });
+      events.push({ t, who: 'B', seg: { state: 'running', label: `心跳 #${Math.floor(t / TICK_MS)}` } });
+      events.push({ t: t + 40, who: 'B', seg: { state: 'waiting', label: '阻塞于 ticker' } });
+    }
+    events.push({ t: Math.min(TOTAL_MS, bLastTick + 12 * TICK_MS), who: 'B', seg: { state: 'done', label: '退出' } });
+
+    // main 结束
+    events.push({ t: Math.min(TOTAL_MS, bLastTick + 12 * TICK_MS + 10), who: 'main', seg: { state: 'running', label: 'wg.Wait() 返回' } });
+
+  } else {
+    /* 关闭抢占模式（纯协作式）：
+       A 拿到 CPU 后永远不主动让出，直到跑完 5 秒。
+       main 和 B 都在 waiting 状态，CPU 完全被 A 独占。
+       A 结束后 CPU 才回到调度器 → main 继续 → wg.Wait → 等 B → B 才开始跑
+    */
+    // 中间的 B ticker 事件仍然会被 Go runtime 记录，但 goroutine B 拿不到 CPU
+    for (let t = TICK_MS; t <= A_LOOP_MS; t += TICK_MS) {
+      events.push({ t, who: 'bTickBuffered', pos: t });
+      // 注意：这些 tick 事件发生了，但 B 没法跑（A 独占）
+    }
+
+    // A 持续运行
+    events.push({ t: 20, who: 'A', seg: { state: 'running', label: '纯循环（独占 CPU）' } });
+
+    // A 结束 —— 关键转折点！
+    events.push({ t: A_LOOP_MS, who: 'A', seg: { state: 'running', label: '打印结束日志' } });
+    events.push({ t: A_LOOP_MS + 30, who: 'A', seg: { state: 'done', label: 'wg.Done()' } });
+    events.push({ t: A_LOOP_MS + 40, who: 'os', seg: { state: 'wait', label: 'A 终于让出' } });
+
+    // main 被唤醒
+    events.push({ t: A_LOOP_MS + 40, who: 'main', seg: { state: 'running', label: 'wg.Wait 还剩 B' } });
+
+    // B 突然被调度到（ticker 事件被缓冲了）
+    events.push({ t: A_LOOP_MS + 60, who: 'os', seg: { state: 'B', label: 'B running' } });
+    events.push({ t: A_LOOP_MS + 60, who: 'B', seg: { state: 'running', label: '被缓冲 tick 唤醒' } });
+    events.push({ t: A_LOOP_MS + 100, who: 'B', seg: { state: 'running', label: '补打心跳' } });
+
+    // B 正常 ticker 继续到结束
+    for (let t = A_LOOP_MS + TICK_MS; t <= TOTAL_MS; t += TICK_MS) {
+      events.push({ t, who: 'bTick', pos: t });
+      events.push({ t, who: 'B', seg: { state: 'running', label: `心跳 #${Math.floor(t / TICK_MS)}` } });
+      events.push({ t: t + 40, who: 'B', seg: { state: 'waiting', label: '阻塞于 ticker' } });
+    }
+
+    // main / B 都结束
+    events.push({ t: TOTAL_MS - 100, who: 'main', seg: { state: 'running', label: 'wg.Wait 返回' } });
+  }
+
+  events.sort((a, b) => a.t - b.t);
+  return events;
+}
+
+/* ======================================================================
+   渲染逻辑
+   ====================================================================== */
+
+const lanes = document.getElementById('lanes');
+const ticksEl = document.getElementById('ticks');
+const playhead = document.getElementById('playhead');
+const statusEl = document.getElementById('status');
+const playBtn = document.getElementById('playBtn');
+const resetBtn = document.getElementById('resetBtn');
+const modeBtns = document.querySelectorAll('#modeToggle button');
+const explanationEl = document.getElementById('explanation');
+const runningGoroutine = document.getElementById('running-goroutine');
+const animTimeEl = document.getElementById('anim-time');
+
+let currentMode = 'async';
+let animFrame = null;
+let animStart = null;
+let playing = false;
+let segments = []; // { laneId, tStart, tEnd, state, label, el }
+let eventMarkers = [];
+
+const laneDefs = [
+  { id: 'os',    label: '🟣 OS 线程 M',   cls: 'os-thread' },
+  { id: 'main',  label: '🔵 main goroutine', cls: 'g-main' },
+  { id: 'A',     label: '🔴 goroutine A',  cls: 'g-a' },
+  { id: 'B',     label: '🟢 goroutine B',  cls: 'g-b' },
+];
+
+// 时间轴刻度
+function renderTicks() {
+  ticksEl.innerHTML = '';
+  for (let t = 0; t <= TOTAL_MS; t += 500) {
+    const div = document.createElement('div');
+    div.className = 'tick';
+    div.style.left = (t / TOTAL_MS * 100) + '%';
+    div.textContent = t + 'ms';
+    ticksEl.appendChild(div);
+  }
+}
+
+// 泳道
+function renderLanes() {
+  lanes.innerHTML = '';
+  for (const def of laneDefs) {
+    const lane = document.createElement('div');
+    lane.className = 'lane';
+    lane.dataset.lane = def.id;
+    lane.innerHTML = `
+      <div class="lane-label"><span>${def.label}</span></div>
+      <div class="track" data-lane="${def.id}"></div>
+    `;
+    lanes.appendChild(lane);
+  }
+}
+
+// 为某个 lane 构建 segment 的"添加状态块"函数
+function addSegmentForLane(timeline, whoKey, cssClass, stateMapper) {
+  // 从 timeline 中提取特定 lane 的状态变化
+  const changes = timeline
+    .filter(e => e.who === whoKey && e.seg)
+    .sort((a, b) => a.t - b.t);
+
+  const track = document.querySelector(`.track[data-lane="${whoKey}"]`);
+  if (!track) return;
+
+  // 清空
+  track.innerHTML = '';
+
+  for (let i = 0; i < changes.length; i++) {
+    const cur = changes[i];
+    const nextT = (i + 1 < changes.length) ? changes[i + 1].t : TOTAL_MS;
+
+    const seg = document.createElement('div');
+    const state = stateMapper(cur.seg.state);
+    seg.className = `seg ${cssClass} ${state}`;
+    seg.style.left = (cur.t / TOTAL_MS * 100) + '%';
+    seg.style.width = ((nextT - cur.t) / TOTAL_MS * 100) + '%';
+    seg.textContent = cur.seg.label || '';
+    seg.style.opacity = 0; // 初始隐藏，动画时逐步显现
+    seg.dataset.tStart = cur.t;
+    seg.dataset.tEnd = nextT;
+    track.appendChild(seg);
+    segments.push({ el: seg, tStart: cur.t, tEnd: nextT });
+  }
+}
+
+// 绘制事件标记（sigurg / tick）
+function renderEvents(timeline, mode) {
+  // 先清除已有标记
+  document.querySelectorAll('.event, .event.annotation').forEach(e => e.remove());
+  eventMarkers = [];
+
+  // 找到 timeline 元素（tracks 外面）
+  const diagram = document.querySelector('.diagram');
+  const tracksContainer = document.querySelector('.lanes');
+  const timelineTracks = document.querySelector('.tracks'); // 不存在
+
+  for (const ev of timeline) {
+    if (ev.who === 'sigurg') {
+      addEvent(ev.pos, 'sigurg', 'SIGURG');
+    } else if (ev.who === 'bTick') {
+      addEvent(ev.pos, 'tick', 'ticker');
+    } else if (ev.who === 'bTickBuffered') {
+      addEvent(ev.pos, 'tick-buffered', 'ticker (被缓冲)');
+    }
+  }
+}
+
+function addEvent(t, type, label) {
+  // 事件标记放在 B goroutine 泳道上（ticker 事件）或 OS 线程泳道上（SIGURG）
+  let targetLane = null;
+  if (type === 'sigurg') {
+    targetLane = document.querySelector('.track[data-lane="os"]');
+  } else {
+    targetLane = document.querySelector('.track[data-lane="B"]');
+  }
+  if (!targetLane) return;
+
+  const dot = document.createElement('div');
+  dot.className = 'event ' + type;
+  if (type === 'tick-buffered') {
+    dot.style.background = 'transparent';
+    dot.style.border = '2px dashed #4af7c0';
+  }
+  dot.style.left = (t / TOTAL_MS * 100) + '%';
+  dot.style.top = '-4px';
+  dot.style.opacity = 0;
+
+  const ann = document.createElement('div');
+  ann.className = 'event annotation';
+  if (type === 'sigurg') {
+    ann.style.background = 'rgba(255,68,68,0.15)';
+    ann.style.color = '#ff8080';
+    ann.style.top = '-20px';
+  } else if (type === 'tick-buffered') {
+    ann.style.background = 'rgba(255,200,68,0.15)';
+    ann.style.color = '#ffcc80';
+    ann.style.top = '100%';
+    ann.style.marginTop = '2px';
+    ann.textContent = 'ticker触发但A不让出';
+  } else {
+    ann.style.background = 'rgba(74,247,192,0.15)';
+    ann.style.color = '#80ffd8';
+    ann.style.top = '100%';
+    ann.style.marginTop = '2px';
+  }
+  ann.style.left = (t / TOTAL_MS * 100) + '%';
+  ann.style.opacity = 0;
+
+  targetLane.parentElement.appendChild(dot);
+  targetLane.parentElement.appendChild(ann);
+
+  eventMarkers.push({ el: dot, ann: ann, t });
+}
+
+function buildDiagram(mode) {
+  segments = [];
+  eventMarkers = [];
+
+  const timeline = buildTimeline(mode);
+
+  // 三条 lane + OS
+  addSegmentForLane(timeline, 'main', 'g-main', s => {
+    if (s === 'done') return 'waiting';
+    if (s === 'running') return 'running';
+    return 'waiting';
+  });
+
+  addSegmentForLane(timeline, 'A', 'g-a', s => {
+    if (s === 'done') return 'waiting';
+    if (s === 'running') return 'running';
+    return 'waiting';
+  });
+
+  addSegmentForLane(timeline, 'B', 'g-b', s => {
+    if (s === 'done') return 'waiting';
+    if (s === 'running') return 'running';
+    return 'waiting';
+  });
+
+  // OS 线程 lane
+  const osSegs = timeline.filter(e => e.who === 'os' && e.seg).sort((a, b) => a.t - b.t);
+  const osTrack = document.querySelector('.track[data-lane="os"]');
+  osTrack.innerHTML = '';
+  for (let i = 0; i < osSegs.length; i++) {
+    const cur = osSegs[i];
+    const nextT = (i + 1 < osSegs.length) ? osSegs[i + 1].t : TOTAL_MS;
+    const seg = document.createElement('div');
+    let stateClass = 'waiting';
+    let textColor = '#d86bff';
+    if (cur.seg.state === 'A') { stateClass = 'running'; seg.style.background = 'linear-gradient(90deg, #b04af7, #d86bff)'; seg.style.color = 'white'; textColor = 'white'; }
+    else if (cur.seg.state === 'B') { stateClass = 'running'; seg.style.background = 'linear-gradient(90deg, #b04af7, #d86bff)'; seg.style.color = 'white'; textColor = 'white'; }
+    else if (cur.seg.state === 'wait') { stateClass = 'waiting'; }
+    seg.className = `seg os-thread ${stateClass}`;
+    seg.style.left = (cur.t / TOTAL_MS * 100) + '%';
+    seg.style.width = ((nextT - cur.t) / TOTAL_MS * 100) + '%';
+    seg.textContent = cur.seg.label;
+    seg.style.opacity = 0;
+    seg.dataset.tStart = cur.t;
+    seg.dataset.tEnd = nextT;
+    seg.dataset.owner = cur.seg.state;
+    osTrack.appendChild(seg);
+    segments.push({ el: seg, tStart: cur.t, tEnd: nextT });
+  }
+
+  // 事件标记
+  renderEvents(timeline, mode);
+
+  // 重置可见性
+  updateVisibility(0);
+}
+
+function updateVisibility(nowMs) {
+  for (const seg of segments) {
+    if (nowMs >= seg.tStart) {
+      seg.el.style.opacity = 1;
+      // 片段内部被"裁剪"：当前正在运行的片段按时间推进显示
+      if (nowMs < seg.tEnd) {
+        const pct = (nowMs - seg.tStart) / (seg.tEnd - seg.tStart) * 100;
+        seg.el.style.clipPath = `inset(0 ${100 - pct}% 0 0)`;
+      } else {
+        seg.el.style.clipPath = 'none';
+      }
+    }
+  }
+
+  // 事件标记
+  for (const ev of eventMarkers) {
+    if (nowMs >= ev.t) {
+      ev.el.style.opacity = 1;
+      if (ev.ann) ev.ann.style.opacity = 1;
+    }
+  }
+
+  // playhead 位置
+  playhead.style.left = (nowMs / TOTAL_MS * 100) + '%';
+
+  // 找出当前 running 的 goroutine
+  const osSeg = document.querySelector('.track[data-lane="os"]');
+  if (osSeg) {
+    const runningSeg = segments.find(s => s.tStart <= nowMs && nowMs < s.tEnd &&
+      s.el.parentElement && s.el.parentElement.dataset.lane === 'os');
+    if (runningSeg) {
+      const owner = runningSeg.el.dataset.owner;
+      runningGoroutine.textContent = owner === 'A' ? '🔴 goroutine A' :
+                                     owner === 'B' ? '🟢 goroutine B' :
+                                     owner === 'wait' ? '调度器空闲' :
+                                     '—';
+    } else {
+      runningGoroutine.textContent = '—';
+    }
+  }
+
+  animTimeEl.textContent = Math.round(nowMs) + 'ms';
+}
+
+function animate(timestamp) {
+  if (!playing) return;
+  if (!animStart) animStart = timestamp;
+  const elapsed = (timestamp - animStart) * 0.5; // 0.5x 速度
+  if (elapsed >= TOTAL_MS) {
+    updateVisibility(TOTAL_MS);
+    playing = false;
+    playBtn.textContent = '▶ 重新播放';
+    statusEl.textContent = '✓ 播放完成';
+    return;
+  }
+  updateVisibility(elapsed);
+  animFrame = requestAnimationFrame(animate);
+}
+
+playBtn.addEventListener('click', () => {
+  if (playing) {
+    playing = false;
+    playBtn.textContent = '▶ 继续';
+    return;
+  }
+  animStart = null;
+  playing = true;
+  playBtn.textContent = '⏸ 暂停';
+  statusEl.textContent = '▶ 播放中...';
+  animFrame = requestAnimationFrame(animate);
+});
+
+resetBtn.addEventListener('click', () => {
+  playing = false;
+  animStart = null;
+  cancelAnimationFrame(animFrame);
+  playBtn.textContent = '▶ 播放动画';
+  buildDiagram(currentMode);
+  statusEl.textContent = '';
+  runningGoroutine.textContent = '—';
+  animTimeEl.textContent = '0ms';
+  if (currentMode === 'async') {
+    explanationEl.className = 'explanation';
+    explanationEl.innerHTML = '<strong>异步抢占开启：</strong> 注意看红色 SIGURG 三角标记——每 ~200ms 就打断 A 一次，让 B 有机会跑。<br>goroutine A 虽然跑的时间最多，但不会把 B 饿死。';
+  } else {
+    explanationEl.className = 'explanation highlight';
+    explanationEl.innerHTML = '<strong>抢占关闭 ⚠️：</strong> A 从 t=20ms 开始一直到 t=<b>5000ms</b> 独占 OS 线程！<br>绿色圆点标记的 ticker 事件虽然发生了，但 goroutine B 根本拿不到 CPU，只能眼巴巴等着 A 跑完。';
+  }
+});
+
+modeBtns.forEach(btn => {
+  btn.addEventListener('click', () => {
+    modeBtns.forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentMode = btn.dataset.mode;
+    playing = false;
+    animStart = null;
+    cancelAnimationFrame(animFrame);
+    playBtn.textContent = '▶ 播放动画';
+    buildDiagram(currentMode);
+    if (currentMode === 'async') {
+      explanationEl.className = 'explanation';
+      explanationEl.innerHTML = '<strong>异步抢占开启：</strong> 红色 SIGURG 三角标记每 ~200ms 打断 A 一次，B 能被调度到。';
+    } else {
+      explanationEl.className = 'explanation highlight';
+      explanationEl.innerHTML = '<strong>抢占关闭 ⚠️：</strong> A 从 t=20ms 到 t=5000ms 独占 CPU！B 被彻底饿死。';
+    }
+  });
+});
+
+// 初始化
+renderTicks();
+renderLanes();
+buildDiagram('async');
+updateVisibility(0);
+</script>
+
+</body>
+</html>

@@ -18,6 +18,35 @@ func SelectSort(arr []int) []int {
 }
 
 func main() {
-	var arr = []int{3, 6, 2, 1, 5}
-	fmt.Println(SelectSort(arr))
+	var arr = []int{4, 5, 6, 3, 2, 1}
+	fmt.Println(SelectSortV3(arr))
+}
+
+func SelectSortV2(arr []int) []int {
+	iter := 0
+	for i := 0; i < len(arr)-iter; {
+		max := i
+		for j := 0; j < len(arr)-iter; j++ {
+			if arr[j] > arr[max] {
+				max = j
+			}
+		}
+		arr[len(arr)-1-iter], arr[max] = arr[max], arr[len(arr)-1-iter]
+		iter++
+		i = 0
+	}
+	return arr
+}
+
+func SelectSortV3(arr []int) []int {
+	for i := 0; i < len(arr)-1; i++ {
+		max := 0
+		for j := 0; j < len(arr)-i; j++ {
+			if arr[j] > arr[max] {
+				max = j
+			}
+		}
+		arr[len(arr)-1-i], arr[max] = arr[max], arr[len(arr)-1-i]
+	}
+	return arr
 }

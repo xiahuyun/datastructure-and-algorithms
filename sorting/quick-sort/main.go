@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"sort"
 )
 
 func partition(arr []int, left, right int) int {
@@ -57,29 +56,70 @@ func (a ByAge) Less(i, j int) bool { return a[i].Age < a[j].Age }
 
 func main() {
 	var arr = []int{11, 8, 3, 9, 7, 1, 2, 5}
-	QuickSort(arr, 0, len(arr)-1)
+	QuickSortV2(arr, 0, len(arr)-1)
 
 	fmt.Println(arr)
 
-	var arr2 = []int{1, 2, 3, 5, 8, 10}
-	QuickSort(arr, 0, len(arr2)-1)
+	/*
+		var arr2 = []int{1, 2, 3, 5, 8, 10}
+		QuickSort(arr, 0, len(arr2)-1)
 
-	people := []Person{
-		{"Bob", 31},
-		{"John", 42},
-		{"Michael", 17},
-		{"Jenny", 26},
-		{"Jenny", 26},
-		{"Jenny", 26},
-		{"Jenny", 26},
-		{"Jenny", 26},
-		{"Jenny", 26},
-		{"Jenny", 26},
-		{"Jenny", 26},
-		{"Jenny", 26},
-		{"Jenny", 26},
-		{"Jenny", 26},
+		people := []Person{
+			{"Bob", 31},
+			{"John", 42},
+			{"Michael", 17},
+			{"Jenny", 26},
+			{"Jenny", 26},
+			{"Jenny", 26},
+			{"Jenny", 26},
+			{"Jenny", 26},
+			{"Jenny", 26},
+			{"Jenny", 26},
+			{"Jenny", 26},
+			{"Jenny", 26},
+			{"Jenny", 26},
+			{"Jenny", 26},
+		}
+
+		sort.Sort(ByAge(people))
+	*/
+}
+
+// QuickSortV2 快速排序v2
+// QuickSortV2(p, q) = QuickSortV2(p, k-1) + QuickSortV2(k+1, q)
+// if p >= q, return
+func QuickSortV2(arr []int, left, right int) {
+	if left >= right {
+		return
 	}
 
-	sort.Sort(ByAge(people))
+	pivot := partitionV2(arr, left, right)
+	QuickSortV2(arr, left, pivot-1)
+	QuickSortV2(arr, pivot+1, right)
+}
+
+// var arr = []int{11, 8, 3, 9, 7, 1, 2, 5}
+// lessTemp = []int{3, 1, 2}
+// greaterTemp = []int{9, 7, 8, 11}
+func partitionV2(arr []int, left, right int) int {
+	var lessTemp = make([]int, 0)
+	var greaterTemp = make([]int, 0)
+	pivot := arr[right]
+	for i := left; i < right+1; i++ {
+		if i == right {
+			continue
+		}
+		if arr[i] <= pivot {
+			lessTemp = append(lessTemp, arr[i])
+		} else {
+			greaterTemp = append(greaterTemp, arr[i])
+		}
+	}
+
+	copy(arr[left:left+len(lessTemp)], lessTemp)
+	arr[left+len(lessTemp)] = pivot
+	for i := 0; i < len(greaterTemp); i++ {
+		arr[left+i+len(lessTemp)+1] = greaterTemp[i]
+	}
+	return left + len(lessTemp)
 }
